@@ -46,6 +46,17 @@ class GoogleDriveService {
       oauth2Client.setCredentials({
         refresh_token: config.refresh_token,
       });
+
+      // Automatically capture and persist rotated refresh tokens
+      oauth2Client.on('tokens', (tokens) => {
+        if (tokens.refresh_token && tokens.refresh_token !== config.refresh_token) {
+          storage.saveGDriveConfig({
+            ...config,
+            refresh_token: tokens.refresh_token,
+          });
+        }
+      });
+
       auth = oauth2Client;
     } else {
       throw new Error('Unsupported auth_type: ' + config.auth_type);
@@ -53,6 +64,33 @@ class GoogleDriveService {
 
     const drive = google.drive({ version: 'v3', auth });
     return { drive, config };
+  }
+
+  /**
+   * Translates common Google API errors (such as invalid_grant or quota limits) into clear actionable messages
+   */
+  static _handleGoogleError(err, actionName = 'operación con Google Drive') {
+    const msg = err.message || String(err);
+
+    if (msg.includes('invalid_grant')) {
+      return new Error(
+        `Error de autorización con Google Drive (invalid_grant): El token de acceso ha expirado o fue revocado por Google.\n\n` +
+        `CÓMO SOLUCIONARLO:\n` +
+        `1. Ve a la pestaña "Google Drive" en el panel de StreamVault y haz clic en "Conectar con Google (1 Clic)" para renovar tu acceso.\n` +
+        `2. IMPORTANTE: Si en Google Cloud Console tu "Pantalla de consentimiento de OAuth" está en estado "En pruebas" (Testing), Google expira el token automáticamente a los 7 días. Pasa tu aplicación a estado "En producción" (In Production) en Google Cloud Console para que el token no vuelva a caducar.`
+      );
+    }
+
+    if (msg.includes('Service Accounts do not have storage quota')) {
+      return new Error(
+        'Google Drive rechazó la subida: Las cuentas de servicio (Service Accounts) tienen 0 bytes de cuota y NO pueden subir archivos a carpetas personales de @gmail.com.\n\n' +
+        'SOLUCIÓN:\n' +
+        '1. Si usas cuenta personal @gmail.com: Cambia el método de autenticación a "OAuth 2.0" en la pestaña Google Drive y conecta tu cuenta.\n' +
+        '2. Si usas Google Workspace: Mueve la carpeta a una "Unidad Compartida" (Shared Drive) y agrega el correo de la cuenta de servicio como "Gestor de contenido".'
+      );
+    }
+
+    return err;
   }
 
   /**
@@ -188,12 +226,9 @@ class GoogleDriveService {
       return result;
     } catch (err) {
       result.ok = false;
-      let msg = err.message || 'Error al conectar con Google Drive.';
-      if (msg.includes('Service Accounts do not have storage quota')) {
-        msg = 'Las Cuentas de Servicio tienen 0 bytes de cuota en carpetas personales (@gmail.com). Para cuentas personales, utiliza OAuth 2.0. Para cuentas corporativas, usa una Unidad Compartida (Shared Drive).';
-      }
-      result.message = msg;
-      throw new Error(msg);
+      const formatted = this._handleGoogleError(err, 'verificación de conexión');
+      result.message = formatted.message;
+      throw formatted;
     }
   }
 
@@ -238,15 +273,7 @@ class GoogleDriveService {
 
       return res.data;
     } catch (err) {
-      if (err.message && err.message.includes('Service Accounts do not have storage quota')) {
-        throw new Error(
-          'Google Drive rechazó la subida: Las cuentas de servicio (Service Accounts) tienen 0 bytes de cuota y NO pueden subir archivos a carpetas personales de @gmail.com.\n\n' +
-          'SOLUCIÓN:\n' +
-          '1. Si usas cuenta personal @gmail.com: Cambia el método de autenticación a "OAuth 2.0" en la pestaña Google Drive y conecta tu cuenta.\n' +
-          '2. Si usas Google Workspace: Mueve la carpeta a una "Unidad Compartida" (Shared Drive) y agrega el correo de la cuenta de servicio como "Gestor de contenido".'
-        );
-      }
-      throw err;
+      throw this._handleGoogleError(err, 'subida de respaldo');
     }
   }
 
@@ -255,69 +282,85 @@ class GoogleDriveService {
    * @param {string} fileId
    */
   static async downloadStream(fileId) {
-    const { drive } = this.getClient();
+    try {
+      const { drive } = this.getClient();
 
-    const res = await drive.files.get(
-      {
-        fileId,
-        alt: 'media',
-        supportsAllDrives: true,
-      },
-      {
-        responseType: 'stream',
-      }
-    );
+      const res = await drive.files.get(
+        {
+          fileId,
+          alt: 'media',
+          supportsAllDrives: true,
+        },
+        {
+          responseType: 'stream',
+        }
+      );
 
-    return res.data;
+      return res.data;
+    } catch (err) {
+      throw this._handleGoogleError(err, 'descarga de respaldo');
+    }
   }
 
   /**
    * Retrieves file metadata
    */
   static async getFileMetadata(fileId) {
-    const { drive } = this.getClient();
-    const res = await drive.files.get({
-      fileId,
-      fields: 'id, name, size, mimeType, md5Checksum, createdTime, webViewLink',
-      supportsAllDrives: true,
-    });
-    return res.data;
+    try {
+      const { drive } = this.getClient();
+      const res = await drive.files.get({
+        fileId,
+        fields: 'id, name, size, mimeType, md5Checksum, createdTime, webViewLink',
+        supportsAllDrives: true,
+      });
+      return res.data;
+    } catch (err) {
+      throw this._handleGoogleError(err, 'obtención de metadatos');
+    }
   }
 
   /**
    * Deletes a file from Google Drive
    */
   static async deleteFile(fileId) {
-    const { drive } = this.getClient();
-    await drive.files.delete({
-      fileId,
-      supportsAllDrives: true,
-    });
-    return true;
+    try {
+      const { drive } = this.getClient();
+      await drive.files.delete({
+        fileId,
+        supportsAllDrives: true,
+      });
+      return true;
+    } catch (err) {
+      throw this._handleGoogleError(err, 'eliminación de archivo');
+    }
   }
 
   /**
    * Lists files in the configured folder
    */
   static async listFiles(folderId = null, pageSize = 20) {
-    const { drive, config } = this.getClient();
-    const targetFolder = folderId || config.folder_id;
+    try {
+      const { drive, config } = this.getClient();
+      const targetFolder = folderId || config.folder_id;
 
-    let q = 'trashed = false';
-    if (targetFolder && targetFolder !== 'root') {
-      q += ` and '${targetFolder}' in parents`;
+      let q = 'trashed = false';
+      if (targetFolder && targetFolder !== 'root') {
+        q += ` and '${targetFolder}' in parents`;
+      }
+
+      const res = await drive.files.list({
+        q,
+        pageSize,
+        fields: 'files(id, name, size, mimeType, createdTime, webViewLink, md5Checksum)',
+        orderBy: 'createdTime desc',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+
+      return res.data.files || [];
+    } catch (err) {
+      throw this._handleGoogleError(err, 'listado de archivos');
     }
-
-    const res = await drive.files.list({
-      q,
-      pageSize,
-      fields: 'files(id, name, size, mimeType, createdTime, webViewLink, md5Checksum)',
-      orderBy: 'createdTime desc',
-      supportsAllDrives: true,
-      includeItemsFromAllDrives: true,
-    });
-
-    return res.data.files || [];
   }
 }
 

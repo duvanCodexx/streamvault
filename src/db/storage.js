@@ -20,6 +20,7 @@ let jsonStore = {
   gdrive_configs: [],
   backup_history: [],
   restore_tests: [],
+  db_copy_history: [],
   settings: {
     cron_schedule: config.BACKUP_CRON,
     auto_verify_integrity: true,
@@ -90,6 +91,24 @@ function initStorage() {
         status TEXT NOT NULL, -- 'PASSED', 'FAILED', 'RUNNING'
         tables_verified INTEGER DEFAULT 0,
         duration_ms INTEGER DEFAULT 0,
+        logs TEXT,
+        error_message TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS db_copy_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        backup_history_id INTEGER,
+        backup_filename TEXT NOT NULL,
+        source_database TEXT NOT NULL,
+        source_db_type TEXT NOT NULL,
+        target_db_config_id INTEGER,
+        target_database_name TEXT NOT NULL,
+        target_host TEXT NOT NULL,
+        target_db_type TEXT NOT NULL,
+        status TEXT NOT NULL, -- 'IN_PROGRESS', 'SUCCESS', 'FAILED'
+        duration_ms INTEGER DEFAULT 0,
+        bytes_restored INTEGER DEFAULT 0,
         logs TEXT,
         error_message TEXT,
         created_at TEXT DEFAULT (datetime('now'))
@@ -399,6 +418,77 @@ const storage = {
       `).all(limit);
     }
     return jsonStore.restore_tests.slice(0, limit);
+  },
+
+  // Database Copy / Restore History
+  createDbCopyHistory: (record) => {
+    if (db) {
+      const res = db.prepare(`
+        INSERT INTO db_copy_history (
+          backup_history_id, backup_filename, source_database, source_db_type,
+          target_db_config_id, target_database_name, target_host, target_db_type,
+          status, duration_ms, bytes_restored, logs, error_message, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'IN_PROGRESS', 0, 0, '', NULL, datetime('now'))
+      `).run(
+        record.backup_history_id,
+        record.backup_filename,
+        record.source_database,
+        record.source_db_type,
+        record.target_db_config_id,
+        record.target_database_name,
+        record.target_host,
+        record.target_db_type
+      );
+      return Number(res.lastInsertRowid);
+    }
+    jsonStore.db_copy_history = jsonStore.db_copy_history || [];
+    const newId = jsonStore.db_copy_history.length + 1;
+    const rec = {
+      ...record,
+      id: newId,
+      status: 'IN_PROGRESS',
+      duration_ms: 0,
+      bytes_restored: 0,
+      logs: '',
+      created_at: new Date().toISOString()
+    };
+    jsonStore.db_copy_history.unshift(rec);
+    saveJsonStore();
+    return newId;
+  },
+
+  updateDbCopyHistory: (id, update) => {
+    if (db) {
+      const fields = [];
+      const values = [];
+      for (const [key, val] of Object.entries(update)) {
+        fields.push(`${key} = ?`);
+        values.push(val);
+      }
+      values.push(id);
+      db.prepare(`UPDATE db_copy_history SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+    } else {
+      jsonStore.db_copy_history = jsonStore.db_copy_history || [];
+      const idx = jsonStore.db_copy_history.findIndex(h => h.id === Number(id));
+      if (idx !== -1) {
+        jsonStore.db_copy_history[idx] = { ...jsonStore.db_copy_history[idx], ...update };
+        saveJsonStore();
+      }
+    }
+  },
+
+  getDbCopyHistory: (limit = 50) => {
+    if (db) {
+      return db.prepare("SELECT * FROM db_copy_history ORDER BY id DESC LIMIT ?").all(limit);
+    }
+    return (jsonStore.db_copy_history || []).slice(0, limit);
+  },
+
+  getDbCopyById: (id) => {
+    if (db) {
+      return db.prepare("SELECT * FROM db_copy_history WHERE id = ?").get(id);
+    }
+    return (jsonStore.db_copy_history || []).find(h => h.id === Number(id));
   },
 
   // System Settings

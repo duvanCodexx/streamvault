@@ -4,6 +4,7 @@ const storage = require('../db/storage');
 const DatabaseStreamer = require('../services/streamer');
 const GoogleDriveService = require('../services/gdrive');
 const RestoreTestService = require('../services/restoreTest');
+const DbCopyService = require('../services/dbCopyService');
 const scheduler = require('../services/scheduler');
 const config = require('../config');
 
@@ -585,6 +586,55 @@ router.post('/restore-tests/trigger/:backupId', async (req, res) => {
     }
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Database Copy & Restore Across Connections Endpoints (Dokploy / VPS)
+router.get('/db-copy/history', (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const history = DbCopyService.getHistory(limit);
+    res.json({ success: true, data: history });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get('/db-copy/status/:id', (req, res) => {
+  try {
+    const copyId = parseInt(req.params.id, 10);
+    const status = DbCopyService.getCopyStatus(copyId);
+    if (!status) {
+      return res.status(404).json({ success: false, error: 'Registro de copia no encontrado.' });
+    }
+    res.json({ success: true, data: status });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/db-copy/execute', async (req, res) => {
+  try {
+    const { backup_id, target_db_id } = req.body || {};
+    if (!backup_id || !target_db_id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Se requiere backup_id y target_db_id para ejecutar la copia.',
+      });
+    }
+
+    const job = await DbCopyService.startCopy({
+      backupId: parseInt(backup_id, 10),
+      targetDbId: parseInt(target_db_id, 10),
+    });
+
+    res.json({
+      success: true,
+      message: job.message,
+      data: job,
+    });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
   }
 });
 

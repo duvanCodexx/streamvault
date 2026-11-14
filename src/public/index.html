@@ -836,8 +836,167 @@
         </div>
       </section>
 
-      <!-- TAB 5: DESPLIEGUE DOKPLOY / VPS -->
+      <!-- TAB 5: DESPLIEGUE DOKPLOY / VPS & COPIA DE BASES DE DATOS -->
       <section class="tab-content space-y-6" id="tab-dokploy">
+        <!-- COPIAR / RESTAURAR BASE DE DATOS ENTRE CONEXIONES -->
+        <div class="rounded-xl bg-surface-container-low border border-outline-variant p-6 space-y-5">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-outline-variant pb-3 gap-2">
+            <div class="flex items-center gap-3">
+              <div class="w-10 h-10 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
+                <span class="material-symbols-outlined text-[24px]">content_copy</span>
+              </div>
+              <div>
+                <h2 class="font-bold text-base text-on-surface">Copiar Base de Datos entre Conexiones (VPS)</h2>
+                <p class="text-xs text-on-surface-variant">Restaura cualquier respaldo exitoso de Google Drive hacia cualquiera de tus conexiones registradas.</p>
+              </div>
+            </div>
+            <span class="h-6 px-2.5 rounded-full font-mono text-[11px] bg-primary-container/10 border border-primary-container/30 text-primary-container inline-flex items-center gap-1.5 self-start sm:self-auto">
+              <span class="material-symbols-outlined text-[14px]">bolt</span>
+              Zero-Disk Streaming
+            </span>
+          </div>
+
+          <!-- Selector Grid -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <!-- Origen: Copia Exitosa de Google Drive -->
+            <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant space-y-3">
+              <label class="block text-xs font-semibold text-on-surface flex items-center justify-between">
+                <span class="flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-secondary text-[16px]">cloud_done</span>
+                  1. Copia de Seguridad Exitosa (Origen en Drive)
+                </span>
+                <span class="text-[10px] font-mono text-outline">Drive File</span>
+              </label>
+              <select id="copy-select-backup" class="w-full bg-surface-container border border-outline-variant rounded-lg px-3 py-2 text-xs text-on-surface focus:outline-none focus:border-primary font-mono">
+                <option value="">Cargando respaldos exitosos...</option>
+              </select>
+              <!-- Info Box Origen -->
+              <div class="p-3 rounded bg-surface-container/60 border border-outline-variant/60 text-[11px] text-on-surface-variant space-y-1 font-mono" id="copy-source-details">
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Motor:</span>
+                  <span id="copy-detail-engine" class="text-on-surface font-semibold">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Base Original:</span>
+                  <span id="copy-detail-db" class="text-primary font-semibold">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Tamaño Comprimido:</span>
+                  <span id="copy-detail-size" class="text-on-surface font-semibold">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Fecha Respaldo:</span>
+                  <span id="copy-detail-date" class="text-on-surface">-</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Destino: Conexión de Base de Datos -->
+            <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant space-y-3">
+              <label class="block text-xs font-semibold text-on-surface flex items-center justify-between">
+                <span class="flex items-center gap-1.5">
+                  <span class="material-symbols-outlined text-primary text-[16px]">database</span>
+                  2. Conexión de Base de Datos (Destino en VPS)
+                </span>
+                <span class="text-[10px] font-mono text-outline">Conexión Registrada</span>
+              </label>
+              <select id="copy-select-target-db" class="w-full bg-surface-container border border-outline-variant rounded-lg px-3 py-2 text-xs text-on-surface focus:outline-none focus:border-primary font-mono">
+                <option value="">Cargando conexiones...</option>
+              </select>
+              <!-- Info Box Destino -->
+              <div class="p-3 rounded bg-surface-container/60 border border-outline-variant/60 text-[11px] text-on-surface-variant space-y-1 font-mono" id="copy-target-details">
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Host Endpoint:</span>
+                  <span id="copy-target-host" class="text-on-surface font-semibold">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Base de Datos:</span>
+                  <span id="copy-target-database" class="text-primary font-semibold">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Usuario:</span>
+                  <span id="copy-target-user" class="text-on-surface">-</span>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-outline">Compatibilidad:</span>
+                  <span id="copy-target-compatibility" class="text-secondary font-semibold">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Botón de Ejecución y Aviso -->
+          <div class="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-outline-variant">
+            <div class="flex items-center gap-2 text-[11px] text-outline">
+              <span class="material-symbols-outlined text-secondary text-[16px] shrink-0">verified_user</span>
+              <span>Restaura tablas y esquemas directamente sin guardar archivos temporales en el disco del VPS.</span>
+            </div>
+            <button id="btn-execute-db-copy" type="button" class="w-full sm:w-auto px-5 py-2.5 rounded-lg bg-primary-container text-on-primary-fixed font-bold text-xs shadow-md hover:bg-surface-tint active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+              <span class="material-symbols-outlined text-[18px]">sync_alt</span>
+              <span>Iniciar Copia en Destino</span>
+            </button>
+          </div>
+
+          <!-- Consola y Feedback en Tiempo Real -->
+          <div id="copy-feedback-panel" class="hidden rounded-lg bg-surface-container-lowest border border-outline-variant overflow-hidden space-y-0 transition-all">
+            <div class="px-4 py-2 bg-surface-container-high border-b border-outline-variant flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-primary-container animate-pulse-dot" id="copy-feedback-pulse"></span>
+                <span class="font-mono text-xs font-semibold text-on-surface" id="copy-feedback-title">Restaurando copia en conexión de destino...</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="font-mono text-[11px] text-outline" id="copy-feedback-timer">0.0s</span>
+                <button type="button" id="btn-copy-feedback-logs" class="text-outline hover:text-on-surface" title="Copiar logs al portapapeles">
+                  <span class="material-symbols-outlined text-[16px]">content_copy</span>
+                </button>
+              </div>
+            </div>
+            <div class="p-3 bg-surface-container font-mono text-[11px] text-on-surface-variant max-h-56 overflow-y-auto whitespace-pre-wrap leading-relaxed" id="copy-feedback-logs">
+              Iniciando transmisión y restauración...
+            </div>
+          </div>
+        </div>
+
+        <!-- HISTÓRICO DE COPIAS REALIZADAS -->
+        <div class="rounded-xl bg-surface-container-low border border-outline-variant p-6 space-y-4">
+          <div class="flex items-center justify-between border-b border-outline-variant pb-3">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-[20px] text-primary">history</span>
+              <div>
+                <h3 class="font-bold text-base text-on-surface">Historial de Copias / Restauraciones Realizadas</h3>
+                <p class="text-xs text-on-surface-variant">Registro cronológico de todas las copias efectuadas entre respaldos y conexiones.</p>
+              </div>
+            </div>
+            <span class="h-6 px-2.5 rounded-full font-mono text-[11px] bg-surface-container border border-outline-variant text-on-surface-variant" id="badge-total-copies">
+              0 copias
+            </span>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b border-outline-variant text-[11px] font-mono text-outline uppercase tracking-wider">
+                  <th class="py-2.5 px-4">Fecha y Hora</th>
+                  <th class="py-2.5 px-4">Respaldo Origen</th>
+                  <th class="py-2.5 px-4">Conexión Destino</th>
+                  <th class="py-2.5 px-4">Motor</th>
+                  <th class="py-2.5 px-4">Estado</th>
+                  <th class="py-2.5 px-4">Duración</th>
+                  <th class="py-2.5 px-4 text-right">Logs</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-outline-variant text-xs" id="table-copies-body">
+                <tr>
+                  <td colspan="7" class="text-center text-outline py-8">
+                    No se han realizado copias entre conexiones todavía.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- GUÍA DOKPLOY VPS -->
         <div class="rounded-xl bg-surface-container-low border border-outline-variant p-6 space-y-4">
           <div class="flex items-center justify-between border-b border-outline-variant pb-3">
             <div>

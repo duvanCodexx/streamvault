@@ -59,7 +59,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnOauthConnect = document.getElementById('btn-oauth-connect');
   const oauthTokenStatus = document.getElementById('oauth-token-status');
 
-  // Lock Screen Elements
+  // Database Copy Elements (Dokploy / VPS)
+  const copySelectBackup = document.getElementById('copy-select-backup');
+  const copySelectTargetDb = document.getElementById('copy-select-target-db');
+  const btnExecuteDbCopy = document.getElementById('btn-execute-db-copy');
+  const copyDetailEngine = document.getElementById('copy-detail-engine');
+  const copyDetailDb = document.getElementById('copy-detail-db');
+  const copyDetailSize = document.getElementById('copy-detail-size');
+  const copyDetailDate = document.getElementById('copy-detail-date');
+  const copyTargetHost = document.getElementById('copy-target-host');
+  const copyTargetDatabase = document.getElementById('copy-target-database');
+  const copyTargetUser = document.getElementById('copy-target-user');
+  const copyTargetCompatibility = document.getElementById('copy-target-compatibility');
+  const copyFeedbackPanel = document.getElementById('copy-feedback-panel');
+  const copyFeedbackPulse = document.getElementById('copy-feedback-pulse');
+  const copyFeedbackTitle = document.getElementById('copy-feedback-title');
+  const copyFeedbackTimer = document.getElementById('copy-feedback-timer');
+  const copyFeedbackLogs = document.getElementById('copy-feedback-logs');
+  const btnCopyFeedbackLogs = document.getElementById('btn-copy-feedback-logs');
+  const badgeTotalCopies = document.getElementById('badge-total-copies');
+  const tableCopiesBody = document.getElementById('table-copies-body');
+
+  let currentBackupsList = [];
+  let currentDbsList = [];
+  let currentCopiesList = [];
+  let copyPollInterval = null;
+  let copyTimerInterval = null;
   const lockScreenOverlay = document.getElementById('lock-screen-overlay');
   const formLockScreen = document.getElementById('form-lock-screen');
   const inputAccessKey = document.getElementById('input-access-key');
@@ -71,8 +96,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnPasteKey = document.getElementById('btn-paste-key');
   const btnLockSession = document.getElementById('btn-lock-session');
   const btnUnlock = document.getElementById('btn-unlock');
-
-  let currentBackupsList = [];
 
   // Token management
   function getToken() {
@@ -443,6 +466,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!json.success) return;
 
       const dbs = json.data;
+      currentDbsList = dbs || [];
+      updateCopyDropdowns();
       // Populate select dropdown
       selectDbManual.innerHTML = '<option value="">Seleccionar Base de Datos...</option>';
       dbs.forEach(db => {
@@ -583,6 +608,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       currentBackupsList = json.data || [];
       renderBackupsTable(currentBackupsList);
+      updateCopyDropdowns();
     } catch (err) {
       console.error('Error fetching backups:', err);
     }
@@ -649,6 +675,335 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // ==========================================
+  // DOKPLOY / VPS DATABASE COPY FUNCTIONS
+  // ==========================================
+  function updateCopyDropdowns() {
+    if (!copySelectBackup || !copySelectTargetDb) return;
+
+    const successfulBackups = (currentBackupsList || []).filter(b => b.status === 'SUCCESS' && b.gdrive_file_id);
+    const activeDbs = (currentDbsList || []).filter(d => d.is_active);
+
+    const prevBackupId = copySelectBackup.value;
+    const prevTargetId = copySelectTargetDb.value;
+
+    if (successfulBackups.length === 0) {
+      copySelectBackup.innerHTML = '<option value="">(No hay copias exitosas en Google Drive)</option>';
+    } else {
+      copySelectBackup.innerHTML = '<option value="">-- Selecciona una Copia Exitosa --</option>' +
+        successfulBackups.map(b => `
+          <option value="${b.id}" ${b.id == prevBackupId ? 'selected' : ''}>
+            ${formatDate(b.created_at)} • ${b.database_name} (${(b.db_type || 'PG').toUpperCase()}) • ${formatBytes(b.size_bytes)}
+          </option>
+        `).join('');
+    }
+
+    if (activeDbs.length === 0) {
+      copySelectTargetDb.innerHTML = '<option value="">(No hay conexiones de BD activas)</option>';
+    } else {
+      copySelectTargetDb.innerHTML = '<option value="">-- Selecciona una Conexión Destino --</option>' +
+        activeDbs.map(d => `
+          <option value="${d.id}" ${d.id == prevTargetId ? 'selected' : ''}>
+            ${d.name} (${(d.type || 'PG').toUpperCase()}) • ${d.database_name} @ ${d.host}:${d.port}
+          </option>
+        `).join('');
+    }
+
+    updateCopyDetails();
+  }
+
+  function updateCopyDetails() {
+    if (!copySelectBackup || !copySelectTargetDb) return;
+
+    const backupId = copySelectBackup.value;
+    const targetDbId = copySelectTargetDb.value;
+
+    const backup = (currentBackupsList || []).find(b => b.id == backupId);
+    const targetDb = (currentDbsList || []).find(d => d.id == targetDbId);
+
+    // Source Info Box
+    if (backup) {
+      if (copyDetailEngine) copyDetailEngine.textContent = (backup.db_type || 'postgres').toUpperCase();
+      if (copyDetailDb) copyDetailDb.textContent = backup.database_name;
+      if (copyDetailSize) copyDetailSize.textContent = formatBytes(backup.size_bytes);
+      if (copyDetailDate) copyDetailDate.textContent = formatDate(backup.created_at);
+    } else {
+      if (copyDetailEngine) copyDetailEngine.textContent = '-';
+      if (copyDetailDb) copyDetailDb.textContent = '-';
+      if (copyDetailSize) copyDetailSize.textContent = '-';
+      if (copyDetailDate) copyDetailDate.textContent = '-';
+    }
+
+    // Target Info Box
+    if (targetDb) {
+      if (copyTargetHost) copyTargetHost.textContent = `${targetDb.host}:${targetDb.port}`;
+      if (copyTargetDatabase) copyTargetDatabase.textContent = targetDb.database_name;
+      if (copyTargetUser) copyTargetUser.textContent = targetDb.username;
+    } else {
+      if (copyTargetHost) copyTargetHost.textContent = '-';
+      if (copyTargetDatabase) copyTargetDatabase.textContent = '-';
+      if (copyTargetUser) copyTargetUser.textContent = '-';
+    }
+
+    // Engine Compatibility Check
+    if (backup && targetDb) {
+      const srcType = (backup.db_type || 'postgres').toLowerCase();
+      const tgtType = (targetDb.type || 'postgres').toLowerCase();
+      const isSrcPg = srcType === 'postgres' || srcType === 'postgresql';
+      const isTgtPg = tgtType === 'postgres' || tgtType === 'postgresql';
+      const isSrcMy = srcType === 'mysql' || srcType === 'mariadb';
+      const isTgtMy = tgtType === 'mysql' || tgtType === 'mariadb';
+
+      if ((isSrcPg && isTgtPg) || (isSrcMy && isTgtMy)) {
+        if (copyTargetCompatibility) {
+          copyTargetCompatibility.className = 'text-secondary font-semibold flex items-center gap-1';
+          copyTargetCompatibility.innerHTML = `<span class="material-symbols-outlined text-[14px]">check_circle</span> Compatible (${srcType.toUpperCase()} ✓)`;
+        }
+        if (btnExecuteDbCopy) btnExecuteDbCopy.disabled = false;
+      } else {
+        if (copyTargetCompatibility) {
+          copyTargetCompatibility.className = 'text-error font-semibold flex items-center gap-1';
+          copyTargetCompatibility.innerHTML = `<span class="material-symbols-outlined text-[14px]">cancel</span> Incompatible (${srcType.toUpperCase()} ≠ ${tgtType.toUpperCase()})`;
+        }
+        if (btnExecuteDbCopy) btnExecuteDbCopy.disabled = true;
+      }
+    } else {
+      if (copyTargetCompatibility) {
+        copyTargetCompatibility.className = 'text-outline font-semibold';
+        copyTargetCompatibility.textContent = 'Selecciona ambos';
+      }
+    }
+  }
+
+  async function fetchCopyHistory() {
+    try {
+      const res = await authFetch('/api/db-copy/history?limit=50');
+      const json = await res.json();
+      if (!json.success) return;
+
+      currentCopiesList = json.data || [];
+      renderCopyHistory(currentCopiesList);
+    } catch (err) {
+      console.error('Error fetching copy history:', err);
+    }
+  }
+
+  function renderCopyHistory(copies) {
+    if (!tableCopiesBody) return;
+
+    if (badgeTotalCopies) {
+      badgeTotalCopies.textContent = `${copies.length} copias registradas`;
+    }
+
+    if (!copies || copies.length === 0) {
+      tableCopiesBody.innerHTML = `
+        <tr>
+          <td colspan="7" class="text-center text-outline py-8">
+            No se han realizado copias entre conexiones todavía.
+          </td>
+        </tr>
+      `;
+      return;
+    }
+
+    tableCopiesBody.innerHTML = copies.map(c => `
+      <tr class="hover:bg-surface-container/50 transition-colors">
+        <td class="py-3 px-4 font-mono text-[11px] text-on-surface-variant">
+          ${formatDate(c.created_at)}
+        </td>
+        <td class="py-3 px-4">
+          <div class="flex items-center gap-1.5">
+            <span class="w-5 h-5 rounded ${c.source_db_type === 'postgres' ? 'bg-primary/10 text-primary' : 'bg-secondary/10 text-secondary'} flex items-center justify-center font-bold text-[9px]">
+              ${c.source_db_type === 'postgres' ? 'PG' : 'MY'}
+            </span>
+            <div>
+              <span class="font-medium text-on-surface font-mono text-xs block">${c.source_database}</span>
+              <span class="font-mono text-[10px] text-outline truncate max-w-[160px] block" title="${c.backup_filename || ''}">${c.backup_filename || ''}</span>
+            </div>
+          </div>
+        </td>
+        <td class="py-3 px-4">
+          <div>
+            <span class="font-semibold text-primary font-mono text-xs block">${c.target_database_name}</span>
+            <span class="font-mono text-[10px] text-outline block">${c.target_host}</span>
+          </div>
+        </td>
+        <td class="py-3 px-4">
+          <span class="px-2 py-0.5 rounded font-mono text-[10px] ${c.target_db_type === 'postgres' ? 'bg-primary/10 text-primary border border-primary/20' : 'bg-secondary/10 text-secondary border border-secondary/20'}">
+            ${(c.target_db_type || 'PG').toUpperCase()}
+          </span>
+        </td>
+        <td class="py-3 px-4">
+          ${c.status === 'SUCCESS' ? `
+            <span class="h-6 px-2.5 rounded-full font-mono text-[10px] bg-secondary/10 border border-secondary/30 text-secondary inline-flex items-center gap-1">
+              <span class="material-symbols-outlined text-[13px]">check_circle</span>
+              Restaurado
+            </span>` :
+            c.status === 'IN_PROGRESS' ? `
+            <span class="h-6 px-2.5 rounded-full font-mono text-[10px] bg-primary-container/10 border border-primary-container/30 text-primary-container inline-flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-primary-container animate-pulse-dot"></span>
+              Copiando...
+            </span>` :
+            `<span class="h-6 px-2.5 rounded-full font-mono text-[10px] bg-error-container/20 border border-error/30 text-error inline-flex items-center gap-1 cursor-help" title="${c.error_message || ''}">
+              <span class="material-symbols-outlined text-[13px]">error</span>
+              Falló
+            </span>`}
+        </td>
+        <td class="py-3 px-4 font-mono text-xs text-on-surface-variant">
+          ${c.duration_ms ? (c.duration_ms / 1000).toFixed(1) + 's' : '-'}
+        </td>
+        <td class="py-3 px-4 text-right">
+          <button class="px-2.5 py-1 rounded bg-surface-container border border-outline-variant hover:bg-surface-variant text-on-surface font-mono text-[11px] btn-view-copy-logs inline-flex items-center gap-1" data-id="${c.id}" title="Ver logs detallados">
+            <span class="material-symbols-outlined text-[14px]">terminal</span>
+            Logs
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+    document.querySelectorAll('.btn-view-copy-logs').forEach(btn => {
+      btn.addEventListener('click', () => showCopyLogsModal(btn.dataset.id));
+    });
+  }
+
+  function showCopyLogsModal(copyId) {
+    const copy = (currentCopiesList || []).find(c => c.id == copyId);
+    if (!copy) return;
+
+    logsContent.textContent = copy.logs || copy.error_message || 'No hay logs registrados para esta operación.';
+    modalLogs.classList.add('open');
+  }
+
+  async function handleExecuteDbCopy() {
+    const backupId = copySelectBackup.value;
+    const targetDbId = copySelectTargetDb.value;
+
+    if (!backupId || !targetDbId) {
+      showToast('Por favor selecciona una copia de seguridad y una conexión de destino.', 'error');
+      return;
+    }
+
+    const backup = (currentBackupsList || []).find(b => b.id == backupId);
+    const targetDb = (currentDbsList || []).find(d => d.id == targetDbId);
+
+    if (!backup || !targetDb) {
+      showToast('Selección inválida.', 'error');
+      return;
+    }
+
+    const srcType = (backup.db_type || 'postgres').toLowerCase();
+    const tgtType = (targetDb.type || 'postgres').toLowerCase();
+    const isSrcPg = srcType === 'postgres' || srcType === 'postgresql';
+    const isTgtPg = tgtType === 'postgres' || tgtType === 'postgresql';
+    const isSrcMy = srcType === 'mysql' || srcType === 'mariadb';
+    const isTgtMy = tgtType === 'mysql' || tgtType === 'mariadb';
+
+    if ((isSrcPg && !isTgtPg) || (isSrcMy && !isTgtMy)) {
+      showToast(`Incompatibilidad: No puedes restaurar un respaldo de ${srcType.toUpperCase()} en un motor ${tgtType.toUpperCase()}.`, 'error');
+      return;
+    }
+
+    const confirmMsg = `¿Confirmas que deseas restaurar el respaldo "${backup.filename}" en la base de datos "${targetDb.database_name}" (${targetDb.name})?\n\nEsta acción canalizará el stream directo desde Google Drive hacia el motor ${tgtType.toUpperCase()}.`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+      btnExecuteDbCopy.disabled = true;
+      btnExecuteDbCopy.innerHTML = '<span class="material-symbols-outlined text-[16px] animate-spin">sync</span><span>Copiando en tiempo real...</span>';
+
+      if (copyFeedbackPanel) copyFeedbackPanel.classList.remove('hidden');
+      if (copyFeedbackTitle) copyFeedbackTitle.textContent = `Restaurando copia en "${targetDb.name}" (${targetDb.database_name})...`;
+      if (copyFeedbackPulse) copyFeedbackPulse.className = 'w-2 h-2 rounded-full bg-primary-container animate-pulse-dot';
+      if (copyFeedbackLogs) copyFeedbackLogs.textContent = `[${new Date().toISOString()}] Solicitud enviada. Estableciendo streaming directo con Google Drive...\n`;
+
+      const startTime = Date.now();
+      if (copyTimerInterval) clearInterval(copyTimerInterval);
+      copyTimerInterval = setInterval(() => {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (copyFeedbackTimer) copyFeedbackTimer.textContent = `${elapsed}s`;
+      }, 200);
+
+      const res = await authFetch('/api/db-copy/execute', {
+        method: 'POST',
+        body: JSON.stringify({
+          backup_id: backupId,
+          target_db_id: targetDbId,
+        }),
+      });
+
+      const json = await res.json();
+      if (!json.success) {
+        throw new Error(json.error || 'Error al iniciar la copia.');
+      }
+
+      const copyId = json.data.copyId;
+      showToast(`Streaming iniciado para ${targetDb.name}. Monitoreando en tiempo real...`, 'info');
+
+      // Poll status every 1000ms
+      if (copyPollInterval) clearInterval(copyPollInterval);
+      copyPollInterval = setInterval(async () => {
+        try {
+          const statusRes = await authFetch(`/api/db-copy/status/${copyId}`);
+          const statusJson = await statusRes.json();
+          if (!statusJson.success) return;
+
+          const job = statusJson.data;
+          if (job.logs && copyFeedbackLogs) {
+            copyFeedbackLogs.textContent = job.logs;
+            copyFeedbackLogs.scrollTop = copyFeedbackLogs.scrollHeight;
+          }
+
+          if (job.status === 'SUCCESS') {
+            clearInterval(copyPollInterval);
+            clearInterval(copyTimerInterval);
+            copyPollInterval = null;
+            copyTimerInterval = null;
+
+            if (copyFeedbackTitle) copyFeedbackTitle.innerHTML = `<span class="text-secondary flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">check_circle</span> ¡Copia de base de datos restaurada con éxito!</span>`;
+            if (copyFeedbackPulse) copyFeedbackPulse.className = 'w-2 h-2 rounded-full bg-secondary';
+            showToast(`🎉 ¡Base de datos copiada exitosamente en ${targetDb.name}!`, 'success');
+
+            btnExecuteDbCopy.disabled = false;
+            btnExecuteDbCopy.innerHTML = '<span class="material-symbols-outlined text-[18px]">sync_alt</span><span>Iniciar Copia en Destino</span>';
+
+            await fetchCopyHistory();
+            await fetchDatabases();
+          } else if (job.status === 'FAILED') {
+            clearInterval(copyPollInterval);
+            clearInterval(copyTimerInterval);
+            copyPollInterval = null;
+            copyTimerInterval = null;
+
+            if (copyFeedbackTitle) copyFeedbackTitle.innerHTML = `<span class="text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">error</span> Falló la copia de base de datos</span>`;
+            if (copyFeedbackPulse) copyFeedbackPulse.className = 'w-2 h-2 rounded-full bg-error';
+            showToast(`Error al copiar: ${job.error || 'Error desconocido'}`, 'error');
+
+            btnExecuteDbCopy.disabled = false;
+            btnExecuteDbCopy.innerHTML = '<span class="material-symbols-outlined text-[18px]">sync_alt</span><span>Iniciar Copia en Destino</span>';
+
+            await fetchCopyHistory();
+          }
+        } catch (pollErr) {
+          console.warn('Poll error:', pollErr);
+        }
+      }, 1000);
+
+      await fetchCopyHistory();
+    } catch (err) {
+      if (copyTimerInterval) clearInterval(copyTimerInterval);
+      if (copyPollInterval) clearInterval(copyPollInterval);
+      copyTimerInterval = null;
+      copyPollInterval = null;
+
+      if (copyFeedbackTitle) copyFeedbackTitle.innerHTML = `<span class="text-error flex items-center gap-1"><span class="material-symbols-outlined text-[16px]">error</span> Error de inicio</span>`;
+      if (copyFeedbackPulse) copyFeedbackPulse.className = 'w-2 h-2 rounded-full bg-error';
+      if (copyFeedbackLogs) copyFeedbackLogs.textContent += `\n[ERROR] ${err.message}`;
+      showToast(`Error al iniciar copia: ${err.message}`, 'error');
+
+      btnExecuteDbCopy.disabled = false;
+      btnExecuteDbCopy.innerHTML = '<span class="material-symbols-outlined text-[18px]">sync_alt</span><span>Iniciar Copia en Destino</span>';
+    }
+  }
+
   async function fetchGDriveConfig() {
     try {
       const res = await authFetch('/api/gdrive-config');
@@ -692,7 +1047,8 @@ document.addEventListener('DOMContentLoaded', () => {
         fetchDatabases(),
         fetchBackups(),
         fetchRestoreTests(),
-        fetchGDriveConfig()
+        fetchGDriveConfig(),
+        fetchCopyHistory()
       ]);
     } catch (e) {}
   }
@@ -955,6 +1311,19 @@ document.addEventListener('DOMContentLoaded', () => {
   btnCloseLogsModal.addEventListener('click', () => modalLogs.classList.remove('open'));
   btnCloseLogs.addEventListener('click', () => modalLogs.classList.remove('open'));
 
+  // Database Copy Event Listeners (Dokploy / VPS)
+  if (copySelectBackup) copySelectBackup.addEventListener('change', updateCopyDetails);
+  if (copySelectTargetDb) copySelectTargetDb.addEventListener('change', updateCopyDetails);
+  if (btnExecuteDbCopy) btnExecuteDbCopy.addEventListener('click', handleExecuteDbCopy);
+  if (btnCopyFeedbackLogs && copyFeedbackLogs) {
+    btnCopyFeedbackLogs.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(copyFeedbackLogs.innerText);
+        showToast('Logs copiados al portapapeles', 'success');
+      } catch (e) {}
+    });
+  }
+
   // Refresh Button
   btnRefresh.addEventListener('click', async () => {
     showToast('Actualizando datos...', 'info');
@@ -974,5 +1343,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchStatus();
     fetchBackups();
     fetchRestoreTests();
+    fetchCopyHistory();
   }, 6000);
 });
